@@ -2,10 +2,14 @@ services:
   backend:
     build: ./backend
     container_name: rag-backend
-    ports: 
+    ports:
       - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./vectorstore:/app/vectorstore
     restart: unless-stopped
@@ -14,14 +18,15 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-  
+
   frontend:
     build: ./frontend
     container_name: rag-frontend
     ports:
       - "8501:8501"
+    environment:
+      - BACKEND_URL=${BACKEND_URL:-http://backend:8000}
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
-

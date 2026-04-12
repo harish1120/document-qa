@@ -1,12 +1,23 @@
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
+import os
+import pickle
+from pathlib import Path
+
+import boto3
+import numpy as np
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from openai import OpenAIError
 from rank_bm25 import BM25Okapi
-import pickle
-import numpy as np
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-VECTOR_DIR = "vectorstore"
+from logger import setup_logger
+
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
+LOCAL_VECTOR_DIR = "vectorstore"
+TMP_VS = "/tmp/vectorstore"
+
+_cache = {"etag": None, "db": None, "docs": None}
 
 PROMPT = """
 You are a helpful assistant.
@@ -22,45 +33,72 @@ Question:
 Answer:
 """
 
+logger = setup_logger(__name__)
 
+
+def _load_vectorstore():
+    """Load vectorstore from S3 (with ETag cache) or local disk."""
+    embeddings = OpenAIEmbeddings()
+
+    if not S3_BUCKET:
+        db = FAISS.load_local(LOCAL_VECTOR_DIR, embeddings, allow_dangerous_deserialization=True)
+        with open(f"{LOCAL_VECTOR_DIR}/docs.pkl", "rb") as f:
+            docs = pickle.load(f)
+        return db, docs
+
+    s3 = boto3.client("s3")
+    head = s3.head_object(Bucket=S3_BUCKET, Key="vectorstore/index.faiss")
+    etag = head["ETag"]
+    if _cache["etag"] == etag and _cache["db"] is not None:
+        return _cache["db"], _cache["docs"]
+
+    Path(TMP_VS).mkdir(exist_ok=True)
+    for fname in ("index.faiss", "index.pkl", "docs.pkl"):
+        s3.download_file(S3_BUCKET, f"vectorstore/{fname}", f"{TMP_VS}/{fname}")
+
+    db = FAISS.load_local(TMP_VS, embeddings, allow_dangerous_deserialization=True)
+    with open(f"{TMP_VS}/docs.pkl", "rb") as f:
+        docs = pickle.load(f)
+
+    _cache.update({"etag": etag, "db": db, "docs": docs})
+    return db, docs
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def answer_question(question: str):
-    # embeddings = OpenAIEmbeddings()
-    # db = FAISS.load_local(VECTOR_DIR, embeddings,
-    #                       allow_dangerous_deserialization=True)
+    try:
+        docs = hybrid_search(question, k=10)
+        context = "\n\n".join([d.page_content for d in docs])
 
-    docs = hybrid_search(question, k=10)
-    context = "\n\n".join([d.page_content for d in docs])
+        llm = ChatOpenAI(model="gpt-5-nano", temperature=0.5)
 
-    llm = ChatOpenAI(model="gpt-5-nano", temperature=0.5)
+        prompt = PromptTemplate(
+            template=PROMPT,
+            input_variables=["context", "question"]
+        )
 
-    prompt = PromptTemplate(
-        template=PROMPT,
-        input_variables=["context", "question"]
-    )
+        response = llm.invoke(prompt.format(
+            context=context,
+            question=question
+        ))
 
-    response = llm.invoke(prompt.format(
-        context=context,
-        question=question
-    ))
+        sources = []
+        for d in docs:
+            sources.append({
+                "content": d.page_content,
+                "page": d.metadata.get("page"),
+                "source": d.metadata.get("source"),
+            })
 
-    sources = []
-    for d in docs:
-        sources.append({
-            "content": d.page_content,
-            "page": d.metadata.get("page"),
-            "source": d.metadata.get("source"),
-        })
+        return response.content, sources
 
-    return response.content, sources
+    except OpenAIError as e:
+        logger.error(f"%OpenAI API error: {e}")
+        raise
 
 
 def hybrid_search(query: str, k: int = 5, alpha: float = 0.5):
-    embeddings = OpenAIEmbeddings()
-    db = FAISS.load_local(VECTOR_DIR, embeddings,
-                          allow_dangerous_deserialization=True)
-
-    with open(f"{VECTOR_DIR}/docs.pkl", "rb") as f:
-        documents = pickle.load(f)
+    db, documents = _load_vectorstore()
 
     bm25 = BM25Okapi([doc.page_content.split() for doc in documents])
 
@@ -83,3 +121,5 @@ def hybrid_search(query: str, k: int = 5, alpha: float = 0.5):
 
     scored.sort(key=lambda x: x[1], reverse=True)
     return [doc for doc, _ in scored[:k]]
+
+

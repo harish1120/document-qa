@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: RAG application — Lambda backend + Fargate frontend + S3 vectorstore
+
+# Deploy:
+#   sam build
+#   sam deploy --guided
+#     (provide: OPENAI_API_KEY, BackendImageUri, FrontendImageUri)
+
+Parameters:
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+  BackendImageUri:
+    Type: String
+    Description: ECR image URI for the Lambda backend (e.g. <account>.dkr.ecr.<region>.amazonaws.com/rag-backend-lambda:latest)
+  FrontendImageUri:
+    Type: String
+    Description: ECR image URI for the Fargate frontend (e.g. <account>.dkr.ecr.<region>.amazonaws.com/rag-frontend:latest)
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+
+Resources:
+
+  # ── S3 ──────────────────────────────────────────────────────────────────────
+  DocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ── IAM ─────────────────────────────────────────────────────────────────────
+  BackendExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:HeadObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${DocsBucket}/*'
+
+  # ── Lambda + API Gateway ─────────────────────────────────────────────────────
+  BackendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref BackendImageUri
+      Role: !GetAtt BackendExecutionRole.Arn
+      Environment:
+        Variables:
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          S3_BUCKET_NAME: !Ref DocsBucket
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BackendApi
+
+  BackendApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - '*'
+
+  # ── ECS Fargate frontend ─────────────────────────────────────────────────────
+  FrontendCluster:
+    Type: AWS::ECS::Cluster
+
+  FrontendTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  FrontendTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: rag-frontend
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt FrontendTaskRole.Arn
+      ContainerDefinitions:
+        - Name: rag-frontend
+          Image: !Ref FrontendImageUri
+          PortMappings:
+            - ContainerPort: 8501
+          Environment:
+            - Name: BACKEND_URL
+              Value: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/rag-frontend
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/rag-frontend
+      RetentionInDays: 7
+
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound traffic on port 8501
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: 0.0.0.0/0
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref FrontendCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref FrontendTaskDef
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !GetAtt FrontendSecurityGroup.GroupId
+
+Outputs:
+  ApiGatewayUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com'
+  DocsBucketName:
+    Description: S3 bucket for vectorstore and uploads
+    Value: !Ref DocsBucket

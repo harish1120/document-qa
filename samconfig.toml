@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "document-qa"
+resolve_s3 = true
+s3_prefix = "document-qa"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "BackendImageUri=\"953005819311.dkr.ecr.ca-central-1.amazonaws.com/rag-backend-lambda:latest\" FrontendImageUri=\"953005819311.dkr.ecr.ca-central-1.amazonaws.com/rag-frontend:latest\""
+image_repositories = []
+
+[default.global.parameters]
+region = "ca-central-1"

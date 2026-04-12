@@ -1,7 +1,9 @@
-import streamlit as st
-import requests
+import os
 
-BACKEND_URL = "http://backend:8000"
+import requests
+import streamlit as st
+
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000")
 TIMEOUT = 60
 
 st.title("📄 PDF Question Answering (RAG)")

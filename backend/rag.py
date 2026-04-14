@@ -8,7 +8,6 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAIError
-from rank_bm25 import BM25Okapi
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from logger import setup_logger
@@ -17,7 +16,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
 LOCAL_VECTOR_DIR = "vectorstore"
 TMP_VS = "/tmp/vectorstore"
 
-_cache = {"etag": None, "db": None, "docs": None}
+_cache = {"etag": None, "db": None, "bm25": None}
 
 PROMPT = """
 You are a helpful assistant.
@@ -37,31 +36,31 @@ logger = setup_logger(__name__)
 
 
 def _load_vectorstore():
-    """Load vectorstore from S3 (with ETag cache) or local disk."""
+    """Load vectorstore and BM25 from S3 (with ETag cache) or local disk."""
     embeddings = OpenAIEmbeddings()
 
     if not S3_BUCKET:
         db = FAISS.load_local(LOCAL_VECTOR_DIR, embeddings, allow_dangerous_deserialization=True)
-        with open(f"{LOCAL_VECTOR_DIR}/docs.pkl", "rb") as f:
-            docs = pickle.load(f)
-        return db, docs
+        with open(f"{LOCAL_VECTOR_DIR}/bm25.pkl", "rb") as f:
+            bm25 = pickle.load(f)
+        return db, bm25
 
     s3 = boto3.client("s3")
     head = s3.head_object(Bucket=S3_BUCKET, Key="vectorstore/index.faiss")
     etag = head["ETag"]
     if _cache["etag"] == etag and _cache["db"] is not None:
-        return _cache["db"], _cache["docs"]
+        return _cache["db"], _cache["bm25"]
 
     Path(TMP_VS).mkdir(exist_ok=True)
-    for fname in ("index.faiss", "index.pkl", "docs.pkl"):
+    for fname in ("index.faiss", "index.pkl", "bm25.pkl"):
         s3.download_file(S3_BUCKET, f"vectorstore/{fname}", f"{TMP_VS}/{fname}")
 
     db = FAISS.load_local(TMP_VS, embeddings, allow_dangerous_deserialization=True)
-    with open(f"{TMP_VS}/docs.pkl", "rb") as f:
-        docs = pickle.load(f)
+    with open(f"{TMP_VS}/bm25.pkl", "rb") as f:
+        bm25 = pickle.load(f)
 
-    _cache.update({"etag": etag, "db": db, "docs": docs})
-    return db, docs
+    _cache.update({"etag": etag, "db": db, "bm25": bm25})
+    return db, bm25
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -98,9 +97,7 @@ def answer_question(question: str):
 
 
 def hybrid_search(query: str, k: int = 5, alpha: float = 0.5):
-    db, documents = _load_vectorstore()
-
-    bm25 = BM25Okapi([doc.page_content.split() for doc in documents])
+    db, bm25 = _load_vectorstore()
 
     # dense
     dense_docs = db.similarity_search_with_score(query, k=10)

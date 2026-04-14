@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Collaboration style
+
+The user is here to **learn**. Do not write code for them unprompted. Instead:
+- Explain the concept or problem
+- Ask guiding questions to lead them toward the solution
+- Give hints or pseudocode if they are stuck, not the full answer
+- Only write complete code if they explicitly ask you to ("just do it", "write it for me", etc.))
+
 ## Commands
 
 ### Python environment (uv)

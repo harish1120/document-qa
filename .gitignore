@@ -209,3 +209,6 @@ __marimo__/
 data/
 vectorstore/
 scrapper.py
+REACT_MIGRATION.md
+ROADMAP.md
+.aider*

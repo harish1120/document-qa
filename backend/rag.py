@@ -6,7 +6,7 @@ import boto3
 import numpy as np
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from aider_sdk import AiderChat, AiderEmbeddings
 from openai import OpenAIError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -37,7 +37,7 @@ logger = setup_logger(__name__)
 
 def _load_vectorstore():
     """Load vectorstore and BM25 from S3 (with ETag cache) or local disk."""
-    embeddings = OpenAIEmbeddings()
+    embeddings = AiderEmbeddings()
 
     if not S3_BUCKET:
         db = FAISS.load_local(LOCAL_VECTOR_DIR, embeddings, allow_dangerous_deserialization=True)
@@ -69,7 +69,7 @@ def answer_question(question: str):
         docs = hybrid_search(question, k=10)
         context = "\n\n".join([d.page_content for d in docs])
 
-        llm = ChatOpenAI(model="gpt-5-nano", temperature=0.5)
+        llm = AiderChat(model="aider-model", temperature=0.5)
 
         prompt = PromptTemplate(
             template=PROMPT,

@@ -16,7 +16,7 @@ from slowapi.util import get_remote_address
 
 from ingest import ingest_pdf
 from logger import setup_logger
-from rag_graph import answer_question
+from corrective_rag import answer_question
 from schemas import AskRequest, AskResponse
 
 load_dotenv()

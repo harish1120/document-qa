@@ -1,5 +1,6 @@
+from sqlalchemy import Boolean
 from logger import setup_logger
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, List, Dict, Literal, Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -14,8 +15,19 @@ logger = setup_logger(__name__)
 
 
 class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    sources: list[dict]
+    question: str
+    current_query: str
+
+    retrieved_docs: List[Dict[str, Any]]   # raw retrieved docs
+    relevant_docs: List[Dict[str, Any]]    # filtered docs
+
+    retries: int
+    decision: Literal["generate", "rewrite", "fallback"]
+
+    answer: str
+    sources: List[Dict[str, Any]]
+
+    debug: Dict[str, Any]
 
 
 SEARCH_TOOL_SCHEMA = {
@@ -61,7 +73,7 @@ def tool_node(state: AgentState) -> dict:
             logger.info(f"ReAct search: {query!r}")
 
             docs = hybrid_search(query, k=5)
-            result_text = "\n\n". join(d.page for d in docs)
+            result_text = "\n\n".join(d.page_content for d in docs)
 
             for d in docs:
                 new_sources.append({

@@ -210,5 +210,6 @@ data/
 vectorstore/
 scrapper.py
 REACT_MIGRATION.md
+LEARNING.md
 ROADMAP.md
 .aider*

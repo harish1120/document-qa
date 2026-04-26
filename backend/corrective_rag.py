@@ -61,6 +61,7 @@ SEARCH_TOOL_SCHEMA = {
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools([SEARCH_TOOL_SCHEMA])
 grader_llm = ChatOpenAI(model=GRADER_MODEL, temperature=GRADER_TEMPERATURE)
+generate_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 
 def agent_node(state: AgentState) -> dict:
@@ -143,9 +144,27 @@ def fallback_node(_: AgentState) -> dict:
     return {"messages": [message]}
 
 
+def generate_node(state: AgentState) -> dict:
+    """Generate final answer using only the graded relevant docs."""
+    question = state.get("question", "")
+    sources = state.get("sources", [])
+
+    context = "\n\n".join(doc["content"] for doc in sources)
+    prompt = (
+        "Answer the question using ONLY the provided context. "
+        "If the context is insufficient, say so clearly.\n\n"
+        f"Context:\n{context}\n\n"
+        f"Question: {question}"
+    )
+
+    response = generate_llm.invoke(prompt)
+    logger.info(f"[CorrectiveRAG] answer generated from {len(sources)} relevant chunks")
+    return {"messages": [AIMessage(content=response.content)]}
+
+
 def route_after_grader(state: AgentState) -> str:
     if state.get("grade", False):
-        return "agent"
+        return "generate"
     if state.get("retries", 0) >= MAX_RETRIES:
         return "fallback"
     return "rewrite"
@@ -233,6 +252,7 @@ graph = StateGraph(AgentState)
 graph.add_node("agent", agent_node)
 graph.add_node("tools", tool_node)
 graph.add_node("grader", grade_documents_node)
+graph.add_node("generate", generate_node)
 graph.add_node("rewrite", rewrite_query_node)
 graph.add_node("fallback", fallback_node)
 
@@ -242,8 +262,9 @@ graph.add_edge("tools", "grader")
 graph.add_conditional_edges(
     "grader",
     route_after_grader,
-    {"agent": "agent", "rewrite": "rewrite", "fallback": "fallback"},
+    {"generate": "generate", "rewrite": "rewrite", "fallback": "fallback"},
 )
+graph.add_edge("generate", END)
 graph.add_edge("rewrite", "agent")
 graph.add_edge("fallback", END)
 

@@ -18,7 +18,7 @@
 
 ## Overview
 
-Document QA lets you upload PDFs and ask questions grounded in their content. Unlike a naive RAG pipeline, this app uses **Corrective RAG (CRAG)** — a LangGraph state machine that retrieves, grades, and self-corrects before generating an answer.
+Document QA lets you upload PDFs and ask questions grounded in their content. Unlike a naive RAG pipeline, this app uses **Corrective RAG (CRAG)**, a LangGraph state machine that retrieves, grades, and self-corrects before generating an answer.
 
 | Layer | Technology |
 |---|---|
